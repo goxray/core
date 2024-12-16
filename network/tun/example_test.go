@@ -8,7 +8,7 @@ import (
 )
 
 func Example_create() {
-	ifc, err := tun.New("utun123")
+	ifc, err := tun.New("utun123", 1500)
 	if err != nil {
 		log.Fatal(err)
 	}
