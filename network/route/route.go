@@ -1,8 +1,6 @@
 /*
 Package route implements basic api to interact with system IP tables.
 
-! Only macOS supported for now.
-
 Add and Delete operations are implemented for gateway/interface addresses.
 */
 package route
