@@ -1,7 +1,5 @@
 /*
 Package tun implements TUN interface operations on system level.
-
-! Only macOS supported for now.
 */
 package tun
 
