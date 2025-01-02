@@ -35,24 +35,33 @@ var DefaultOpts = &Opts{
 	UDPTimeout: 30 * time.Second,
 }
 
+// Pipe represents a pipe that connects io.ReadWriteCloser and sock5 proxy.
+type Pipe struct {
+	opts *Opts
+}
+
+func NewPipe(opts *Opts) (*Pipe, error) {
+	if opts == nil {
+		opts = DefaultOpts
+	}
+
+	return &Pipe{opts: opts}, nil
+}
+
 // Copy connects io.ReadWriteCloser to socks5 server.
 //
 // It reads IP packets from pipe and routes them to socks5 and back.
-// This function blocks for the duration of the whole transmission and
+// This function blocks for the duration of the whole transmission, and
 // it is recommended to gracefully unlock it (ending the established connection) by cancelling the ctx.
-func Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string, options *Opts) error {
-	if options == nil {
-		options = DefaultOpts
-	}
-
+func (p *Pipe) Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string) error {
 	proxy, err := parseSocksAddr(socks5)
 	if err != nil {
 		return fmt.Errorf("parse socks addr: %v", err)
 	}
 
 	core.RegisterTCPConnHandler(socks.NewTCPHandler(proxy.IP.String(), uint16(proxy.Port)))
-	if options.UDP {
-		core.RegisterUDPConnHandler(socks.NewUDPHandler(proxy.IP.String(), uint16(proxy.Port), options.UDPTimeout))
+	if p.opts.UDP {
+		core.RegisterUDPConnHandler(socks.NewUDPHandler(proxy.IP.String(), uint16(proxy.Port), p.opts.UDPTimeout))
 	}
 
 	// Register an output callback to write packets output from lwip stack to pipe
@@ -61,7 +70,7 @@ func Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string, options *
 
 	// Setup TCP/IP stack.
 	lwipWriter := core.NewLWIPStack()
-	_, err = io.CopyBuffer(lwipWriter, newCtxReader(ctx, pipe), make([]byte, options.MTU))
+	_, err = io.CopyBuffer(lwipWriter, newCtxReader(ctx, pipe), make([]byte, p.opts.MTU))
 	if err != nil {
 		if isErrorExpected(ctx, err) {
 			return nil
@@ -76,6 +85,16 @@ func Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string, options *
 	}
 
 	return nil
+}
+
+// Copy is a one-function version of Pipe.Copy().
+func Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string, options *Opts) error {
+	p, err := NewPipe(options)
+	if err != nil {
+		return err
+	}
+
+	return p.Copy(ctx, pipe, socks5)
 }
 
 // isErrorExpected implements a hacky way to ensure we close the connection properly.
