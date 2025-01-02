@@ -26,6 +26,23 @@ type Opts struct {
 	Routes  []*Addr
 }
 
+// Route is used to add or delete system routes.
+type Route struct{}
+
+func New() (*Route, error) {
+	return &Route{}, nil
+}
+
+// Add adds route to ip table.
+func (r *Route) Add(options Opts) error {
+	return addDeleteRoutes(options, false)
+}
+
+// Delete deletes route from ip table.
+func (r *Route) Delete(options Opts) error {
+	return addDeleteRoutes(options, true)
+}
+
 // Add adds route to ip table.
 func Add(options Opts) error {
 	return addDeleteRoutes(options, false)
