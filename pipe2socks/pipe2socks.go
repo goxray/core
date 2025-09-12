@@ -16,8 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/eycorsican/go-tun2socks/core"
-	"github.com/eycorsican/go-tun2socks/proxy/socks"
+	"github.com/xjasonlyu/tun2socks/v2/core"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
+	"github.com/xjasonlyu/tun2socks/v2/proxy"
+	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
 // Opts contain options for the established connection between pipe and Socks server.
@@ -37,7 +40,9 @@ var DefaultOpts = &Opts{
 
 // Pipe represents a pipe that connects io.ReadWriteCloser and sock5 proxy.
 type Pipe struct {
-	opts *Opts
+	opts  *Opts
+	stack *stack.Stack
+	proxy proxy.Proxy
 }
 
 func NewPipe(opts *Opts) (*Pipe, error) {
@@ -54,33 +59,50 @@ func NewPipe(opts *Opts) (*Pipe, error) {
 // This function blocks for the duration of the whole transmission, and
 // it is recommended to gracefully unlock it (ending the established connection) by cancelling the ctx.
 func (p *Pipe) Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string) error {
-	proxy, err := parseSocksAddr(socks5)
+	proxyAddr, err := parseSocksAddr(socks5)
 	if err != nil {
 		return fmt.Errorf("parse socks addr: %v", err)
 	}
 
-	core.RegisterTCPConnHandler(socks.NewTCPHandler(proxy.IP.String(), uint16(proxy.Port)))
-	if p.opts.UDP {
-		core.RegisterUDPConnHandler(socks.NewUDPHandler(proxy.IP.String(), uint16(proxy.Port), p.opts.UDPTimeout))
+	// Create SOCKS5 proxy
+	p.proxy, err = proxy.NewSocks5(proxyAddr.String(), "", "")
+	if err != nil {
+		return fmt.Errorf("create socks proxy: %v", err)
 	}
 
-	// Register an output callback to write packets output from lwip stack to pipe
-	// device, output function should be set before input any packets.
-	core.RegisterOutputFn(pipe.Write)
+	// Set the proxy for tunnel
+	tunnel.T().SetDialer(p.proxy)
 
-	// Setup TCP/IP stack.
-	lwipWriter := core.NewLWIPStack()
-	_, err = io.CopyBuffer(lwipWriter, newCtxReader(ctx, pipe), make([]byte, p.opts.MTU))
+	// Set UDP timeout if UDP is enabled
+	if p.opts.UDP {
+		tunnel.T().SetUDPTimeout(p.opts.UDPTimeout)
+	}
+
+	// Create device endpoint from io.ReadWriteCloser
+	device, err := iobased.New(pipe, uint32(p.opts.MTU), 0)
 	if err != nil {
-		if isErrorExpected(ctx, err) {
-			return nil
-		}
+		return fmt.Errorf("create device: %v", err)
+	}
 
-		err = fmt.Errorf("write lwip stack: %v", err)
-		if ctx.Err() != nil {
-			return errors.Join(err, ctx.Err())
-		}
+	// Create stack
+	p.stack, err = core.CreateStack(&core.Config{
+		LinkEndpoint:     device,
+		TransportHandler: tunnel.T(),
+	})
+	if err != nil {
+		return fmt.Errorf("create stack: %v", err)
+	}
 
+	// Wait for context cancellation
+	<-ctx.Done()
+
+	// Cleanup
+	if p.stack != nil {
+		p.stack.Close()
+		p.stack.Wait()
+	}
+
+	if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 
@@ -95,34 +117,6 @@ func Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string, options *
 	}
 
 	return p.Copy(ctx, pipe, socks5)
-}
-
-// isErrorExpected implements a hacky way to ensure we close the connection properly.
-func isErrorExpected(ctx context.Context, err error) bool {
-	closed := strings.Contains(err.Error(), "already closed") || errors.Is(err, io.EOF)
-	if errors.Is(ctx.Err(), context.Canceled) && closed {
-		return true
-	}
-
-	return false
-}
-
-func newCtxReader(ctx context.Context, r io.Reader) io.Reader {
-	return &ctxReader{ctx: ctx, r: r}
-}
-
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r *ctxReader) Read(p []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, io.EOF
-	default:
-		return r.r.Read(p)
-	}
 }
 
 func parseSocksAddr(socks5 string) (*net.TCPAddr, error) {
