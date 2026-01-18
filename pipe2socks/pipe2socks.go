@@ -19,6 +19,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
+	proxysocks5 "github.com/xjasonlyu/tun2socks/v2/proxy/socks5"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
@@ -65,13 +66,13 @@ func (p *Pipe) Copy(ctx context.Context, pipe io.ReadWriteCloser, socks5 string)
 	}
 
 	// Create SOCKS5 proxy
-	p.proxy, err = proxy.NewSocks5(proxyAddr.String(), "", "")
+	p.proxy, err = proxysocks5.New(proxyAddr.String(), "", "")
 	if err != nil {
 		return fmt.Errorf("create socks proxy: %v", err)
 	}
 
 	// Set the proxy for tunnel
-	tunnel.T().SetDialer(p.proxy)
+	tunnel.T().SetProxy(p.proxy)
 
 	// Set UDP timeout if UDP is enabled
 	if p.opts.UDP {
